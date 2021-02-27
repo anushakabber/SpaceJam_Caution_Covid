@@ -1,58 +1,84 @@
-const video = document.getElementById('video');
+$(document).ready(function(){
 
-var socket = io.connect('http://127.0.0.1:5000');
-socket.on( 'connect', function() {
-  console.log("SOCKET CONNECTED")
-})
+           
 
-navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
-Promise.all([
-  faceapi.loadFaceLandmarkModel("http://127.0.0.1:5000/static/models/"),
-  faceapi.loadFaceRecognitionModel("http://127.0.0.1:5000/static/models/"),
-  faceapi.loadTinyFaceDetectorModel("http://127.0.0.1:5000/static/models/"),
-  faceapi.loadFaceLandmarkModel("http://127.0.0.1:5000/static/models/"),
-  faceapi.loadFaceLandmarkTinyModel("http://127.0.0.1:5000/static/models/"),
-  faceapi.loadFaceRecognitionModel("http://127.0.0.1:5000/static/models/"),
-  faceapi.loadFaceExpressionModel("http://127.0.0.1:5000/static/models/"),
-])
-  .then(startVideo)
-  .catch(err => console.error(err));
+  let video = document.querySelector("#videoElement");
+  let currentStream;
+  let displaySize;
 
-function startVideo() {
-  console.log("access");
-  navigator.getUserMedia(
-    {
-      video: {}
-    },
-    stream => video.srcObject = stream,
-    err => console.error(err)
-  )
-}
+  if (navigator.mediaDevices.getUserMedia) {
+  navigator.mediaDevices.getUserMedia({ video: true })
+      .then(function (stream) {
+      video.srcObject = stream;
+      })
+      .catch(function (err0r) {
+      console.log("Something went wrong!");
+      });
+  }
+  
+  let temp = []
+  $("#videoElement").bind("loadedmetadata", function(){
+      displaySize = { width:this.scrollWidth, height: this.scrollHeight }
 
-video.addEventListener('play', () => {
-  // console.log('thiru');
+      async function detect(){
 
-  const canvas = faceapi.createCanvasFromMedia(video);
-  document.body.append(canvas);
-  const displaySize = { width: video.width, height: video.height };
-  faceapi.matchDimensions(canvas, displaySize);
+          const MODEL_URL = '/models'
 
-  setInterval(async () => {
-    const detections = await faceapi
-      .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
-      .withFaceLandmarks()
-      .withFaceExpressions();
-    console.log(detections)
-    socket.emit( 'my event', {
-      data: detections
-    })
-    
-    const resizedDetections = faceapi.resizeResults(detections, displaySize);
-    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-    faceapi.draw.drawDetections(canvas, resizedDetections);
-    faceapi.draw.drawFaceLandmarks(canvas, resizedDetections);
-    faceapi.draw.drawFaceExpressions(canvas, resizedDetections);
+          await faceapi.loadSsdMobilenetv1Model(MODEL_URL)
+          await faceapi.loadFaceLandmarkModel(MODEL_URL)
+          await faceapi.loadFaceRecognitionModel(MODEL_URL)
 
-    console.log(detections);
-  }, 100)
-})
+          let canvas = $("#canvas").get(0);
+
+          facedetection = setInterval(async () =>{
+
+              let fullFaceDescriptions = await faceapi.detectAllFaces(video).withFaceLandmarks().withFaceDescriptors()
+              let canvas = $("#canvas").get(0);
+              faceapi.matchDimensions(canvas, displaySize)
+
+              const fullFaceDescription = faceapi.resizeResults(fullFaceDescriptions, displaySize)
+              // faceapi.draw.drawDetections(canvas, fullFaceDescriptions)
+
+              const labels = ["img/steveoni"]
+
+              const labeledFaceDescriptors = await Promise.all(
+                  labels.map(async label => {
+                      // fetch image data from urls and convert blob to HTMLImage element
+                      const imgUrl = `${label}.JPG`
+                      const img = await faceapi.fetchImage(imgUrl)
+                      
+                      // detect the face with the highest score in the image and compute it's landmarks and face descriptor
+                      const fullFaceDescription = await faceapi.detectSingleFace(img).withFaceLandmarks().withFaceDescriptor()
+                      
+                      if (!fullFaceDescription) {
+                      throw new Error(`no faces detected for ${label}`)
+                      }
+                      
+                      const faceDescriptors = [fullFaceDescription.descriptor]
+                      return new faceapi.LabeledFaceDescriptors(label, faceDescriptors)
+                  })
+              );
+
+              const maxDescriptorDistance = 0.6
+              const faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, maxDescriptorDistance)
+
+              const results = fullFaceDescriptions.map(fd => faceMatcher.findBestMatch(fd.descriptor))
+
+              results.forEach((bestMatch, i) => {
+                  const box = fullFaceDescriptions[i].detection.box
+                  const text = bestMatch.toString()
+                  const drawBox = new faceapi.draw.DrawBox(box, { label: text })
+                  drawBox.draw(canvas)
+              })
+
+          },300);
+
+          console.log(displaySize)
+      }
+      detect()
+      
+  });   
+
+})  
+
+
